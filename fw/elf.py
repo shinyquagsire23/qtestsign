@@ -156,19 +156,26 @@ class Elf:
 			phdrs.append(phdr)
 
 			# Store data if necessary
-			if phdr.p_filesz and phdr.p_offset:
+			if phdr.p_filesz:
 				phdr.data = view[phdr.p_offset:phdr.p_offset + phdr.p_filesz]
 
 			offset += ehdr.e_phentsize
 
 		return Elf(ehdr, phdrs)
 
-	def update(self):
+	def update(self, keep_load_segment_offsets=False):
 		# Rearrange all segments according to their alignment
 		pos = self.total_header_size()
 		for phdr in sorted(self.phdrs, key=lambda phdr: phdr.p_offset):
 			if phdr.p_offset and phdr.p_filesz:
-				phdr.p_offset = _align(pos, phdr.p_align)
+				if keep_load_segment_offsets:
+					print(hex(phdr.p_flags >> 20), hex(phdr.p_offset), hex(phdr.p_align))
+					sect_type = (phdr.p_flags >> 20)
+					if sect_type != 0x10 and sect_type != 0x00: # LOAD
+						phdr.p_offset = _align(pos, phdr.p_align)
+					print(hex(phdr.p_flags >> 20), hex(phdr.p_offset), hex(phdr.p_align))
+				else:
+					phdr.p_offset = _align(pos, phdr.p_align)
 				pos = phdr.p_offset + phdr.p_filesz
 
 		# Ensure program header count is correct

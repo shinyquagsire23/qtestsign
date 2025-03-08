@@ -30,9 +30,16 @@ FW_SW_ID = {
 	"slpi": 0x18,
 	"abl": 0x1C,
 	"cmnlib": 0x1F,
+	"unk20": 0x20, # valid in xbl-tme
 	"aop": 0x21,
+	"unk22": 0x22, # valid in xbl-tme
+	"unk23": 0x23, # valid in xbl-tme
 	"qup": 0x24,
 	"xbl-config": 0x25,
+	"unk31": 0x31, # valid in xbl-tme
+	"xbl-tme": 0x35,
+	"xbl-sc": 0x36,
+	"unk37": 0x37, # valid in xbl-tme
 }
 
 
@@ -58,7 +65,7 @@ parser = argparse.ArgumentParser(description="""
 """)
 parser.add_argument('type', choices=FW_SW_ID.keys(), help="Firmware type (for SW_ID)")
 parser.add_argument('elf', type=argparse.FileType('rb'), help="ELF image to sign")
-parser.add_argument('-v', '--version', type=int, choices=[3, 5, 6], default=3,
+parser.add_argument('-v', '--version', type=int, choices=[3, 5, 6, 7], default=3,
 					help="MBN header version. Must be set correctly depending on the target chipset. "
 						 "See README for details.")
 parser.add_argument('-o', '--output', type=Path, help="Output file")
