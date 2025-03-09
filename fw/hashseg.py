@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from io import BytesIO
 from struct import Struct
 import struct
+from datetime import datetime, timedelta
 
 from cryptography import x509
-from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature, Prehashed
 
@@ -333,7 +335,6 @@ class HashSegmentV5(_HashSegment):
 class HashSegmentV6(HashSegmentV5):
 	version: int = 6  # Header version number
 
-	# TODO: Compare against V7 and verify the order of these
 	metadata_size_qti: int = 0  # Size of metadata from Qualcomm
 	metadata_size_oem: int = 0  # Size of metadata
 
@@ -601,8 +602,8 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 			"06 %04X MODEL_ID" % 0,
 			"07 %04X SHA256" % 1,
 		]
-	hash_seg.cert_chain = cert.generate_chain(ou_fields)
-	hash_seg.cert_chain = hash_seg.cert_chain.ljust(_align(len(hash_seg.cert_chain), CERT_CHAIN_ALIGN), b'\xff')
+	hash_seg.cert_chain_oem = cert.generate_chain(ou_fields)
+	hash_seg.cert_chain_oem = hash_seg.cert_chain_oem.ljust(_align(len(hash_seg.cert_chain_oem), CERT_CHAIN_ALIGN), b'\xff')
 	# hash_seg.cert_chain = b''  # uncomment this to omit the certificate chain in the signed image
 
 	# TODO: Generate actual signature with our generated attestation certificate!
@@ -615,11 +616,6 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 	
 	# TODO real fake signing
 	'''
-	from cryptography.hazmat.primitives.asymmetric import utils
-	from cryptography.hazmat.primitives import hashes
-	from cryptography.hazmat.primitives.asymmetric import ec
-	from cryptography.hazmat.backends import default_backend
-
 	# Generate a private key for secp384r1
 	private_key = ec.generate_private_key(ec.SECP384R1(), default_backend())
 
@@ -637,19 +633,6 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 		print("Signature verification failed:", e)
 	'''
 
-	if version >= 7:
-		hash_seg.metadata_common = struct.pack("<LLLLLL", 0, 0, sw_id, 0, 3, 0)
-
-		# In version 7, the signature and cert have to be valid ASN.1
-		hash_seg.metadata_oem = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
-		hash_seg.signature_oem = SIGNATURE_SIZE_SECP384R1 * b'\x00'
-		hash_seg.cert_chain_oem = CERT_CHAIN_SIZE_V7 * b'\x00'
-
-		# In version 7, the signature and cert have to be valid ASN.1
-		hash_seg.metadata_qti = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
-		hash_seg.signature_qti = SIGNATURE_SIZE_SECP384R1 * b'\x00'
-		hash_seg.cert_chain_qti = CERT_CHAIN_SIZE_V7 * b'\x00'
-
 	# Align maximum end address to get address for hash table header, then update header
 	hash_offs = HASH_SEG_ALIGN
 	hash_addr = _align(max(phdr.p_paddr + phdr.p_memsz for phdr in elff.phdrs), HASH_SEG_ALIGN)
@@ -659,7 +642,6 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 		hash_offs = _align(max(phdr.p_offset for phdr in elff.phdrs), HASH_SEG_ALIGN)
 		hash_addr = 0
 		hash_memsz = hash_seg.size_with_header
-	print(hash_seg)
 
 	# Insert new hash NULL segment
 	hash_phdr = elf.Phdr(0, hash_offs, hash_addr, hash_addr, hash_seg.size_with_header,
@@ -691,6 +673,71 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 	# Hash segment has no hash
 	if version >= 7:
 		hash_seg.hashes[-1] = b'\x00'*digest_size
+
+	# TODO v3/v5/v6 signing
+	# In version 7, the signature and cert have to be valid ASN.1
+	if version >= 7:
+		hash_seg.metadata_common = struct.pack("<LLLLLL", 0, 0, sw_id, 0, 3, 0)
+		hash_seg.metadata_oem = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
+		hash_seg.metadata_qti = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
+
+		signature_oem = SIGNATURE_SIZE_SECP384R1 * b'\x00'
+		signature_qti = SIGNATURE_SIZE_SECP384R1 * b'\x00'
+		cert_der = CERT_CHAIN_SIZE_V7 * b'\xFF'
+
+		hash_seg.signature_oem = signature_oem
+		hash_seg.cert_chain_oem = cert_der
+		hash_seg.signature_qti = signature_qti
+		hash_seg.cert_chain_qti = cert_der
+
+		hash_seg.update(hash_addr)
+
+		private_key = ec.generate_private_key(ec.SECP384R1())
+		public_key = private_key.public_key()
+
+		# Build X.509 certificate
+		subject = issuer = x509.Name([
+		    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+		    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+		    x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+		    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "qtestsign"),
+		    x509.NameAttribute(NameOID.COMMON_NAME, "qtestsign fakesign cert"),
+		])
+
+		cert_ecdsa = (
+		    x509.CertificateBuilder()
+		    .subject_name(subject)
+		    .issuer_name(issuer)
+		    .public_key(public_key)
+		    .serial_number(x509.random_serial_number())
+		    .not_valid_before(datetime.utcnow())
+		    .not_valid_after(datetime.utcnow() + timedelta(days=365))
+		    .sign(private_key, hashes.SHA384())
+		)
+
+		# Encode certificate to DER format
+		cert_der = cert_ecdsa.public_bytes(serialization.Encoding.DER)
+
+		# Sign the message
+		message_qti = hash_seg.pack_sigchecked_qti()
+		signature_qti = private_key.sign(
+		    message_qti,
+		    ec.ECDSA(hashes.SHA384())
+		)
+		message_oem = hash_seg.pack_sigchecked_oem()
+		signature_oem = private_key.sign(
+		    message_oem,
+		    ec.ECDSA(hashes.SHA384())
+		)
+
+		signature_oem = signature_oem + ((SIGNATURE_SIZE_SECP384R1 - len(signature_oem)) * b'\x00')
+		signature_qti = signature_qti + ((SIGNATURE_SIZE_SECP384R1 - len(signature_qti)) * b'\x00')
+		cert_der = cert_der + ((CERT_CHAIN_SIZE_V7 - len(cert_der)) * b'\xFF')
+
+		hash_seg.signature_oem = signature_oem
+		hash_seg.cert_chain_oem = cert_der
+		hash_seg.signature_qti = signature_qti
+		hash_seg.cert_chain_qti = cert_der
 
 	# And finally, assemble the hash segment
 	hash_phdr.data = hash_seg.pack()
@@ -902,7 +949,6 @@ def dump(elff: elf.Elf, sect: elf.Phdr):
 			any_fails = True
 		elif version > 3 and version < 7:
 			print(f"TODO: Sigchecks for version {version}")
-
 
 	# TODO: This is bare-minimum signature verification
 	# (no cert chain checking)
