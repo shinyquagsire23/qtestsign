@@ -169,11 +169,9 @@ class Elf:
 		for phdr in sorted(self.phdrs, key=lambda phdr: phdr.p_offset):
 			if phdr.p_offset and phdr.p_filesz:
 				if keep_load_segment_offsets:
-					print(hex(phdr.p_flags >> 20), hex(phdr.p_offset), hex(phdr.p_align))
 					sect_type = (phdr.p_flags >> 20)
 					if sect_type != 0x10 and sect_type != 0x00: # LOAD
 						phdr.p_offset = _align(pos, phdr.p_align)
-					print(hex(phdr.p_flags >> 20), hex(phdr.p_offset), hex(phdr.p_align))
 				else:
 					phdr.p_offset = _align(pos, phdr.p_align)
 				pos = phdr.p_offset + phdr.p_filesz
