@@ -19,8 +19,12 @@ FW_SW_ID = {
 	"devcfg": 0x05,
 	"tz": 0x07,
 	"aboot": 0x09,
+	"uefi": 0x09,
 	"rpm": 0x0A,
 	"tz-app": 0x0C,
+	"featenabler": 0x0C,
+	"keymaster": 0x0C,
+	"uefisecapp": 0x0C,
 	"wcnss": 0x0D,
 	"venus": 0x0E,
 	"wlanmdsp": 0x12,
@@ -30,16 +34,20 @@ FW_SW_ID = {
 	"slpi": 0x18,
 	"abl": 0x1C,
 	"cmnlib": 0x1F,
-	"unk20": 0x20, # valid in xbl-tme
+	"shrm": 0x20,
 	"aop": 0x21,
 	"unk22": 0x22, # valid in xbl-tme
 	"unk23": 0x23, # valid in xbl-tme
 	"qup": 0x24,
+	"qupfw": 0x24,
 	"xbl-config": 0x25,
-	"unk31": 0x31, # valid in xbl-tme
+	"imagefv": 0x27,
+	"cpucp": 0x31,
 	"xbl-tme": 0x35,
 	"xbl-sc": 0x36,
 	"unk37": 0x37, # valid in xbl-tme
+	"aop_config": 0x3D,
+	"xbl-ramdump": 0x42
 }
 
 

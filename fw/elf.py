@@ -166,21 +166,23 @@ class Elf:
 	def update(self, keep_load_segment_offsets=False):
 		# Rearrange all segments according to their alignment
 		pos = self.total_header_size()
-		for phdr in sorted(self.phdrs, key=lambda phdr: phdr.p_offset):
+		for phdr in self.phdrs:
+			sect_type = (phdr.p_flags >> 20)
 			if phdr.p_offset and phdr.p_filesz:
 				if keep_load_segment_offsets:
-					sect_type = (phdr.p_flags >> 20)
 					if sect_type != 0x10 and sect_type != 0x00: # LOAD
 						phdr.p_offset = _align(pos, phdr.p_align)
 				else:
 					phdr.p_offset = _align(pos, phdr.p_align)
 				pos = phdr.p_offset + phdr.p_filesz
 
+
 		# Ensure program header count is correct
 		self.ehdr.e_phnum = len(self.phdrs)
-
+		
 		# TODO: Clear out sections for now. Those are not read at the moment.
 		# Also, I don't think the Qualcomm firmware loader has any use for these.
+		self.ehdr.e_phoff = 0x40
 		self.ehdr.e_shoff = 0
 		self.ehdr.e_shnum = 0
 		self.ehdr.e_shstrndx = 0

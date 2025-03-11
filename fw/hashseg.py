@@ -503,7 +503,9 @@ class HashSegmentV7():
 		return ret
 
 	def pack(self):
-		return self.pack_sigchecked() \
+		return self.pack_header() \
+			+ bytes(self.metadata_common) + bytes(self.metadata_qti) + bytes(self.metadata_oem) \
+			+ b''.join(self.hashes) \
 			+ self.signature_qti + self.cert_chain_qti \
 			+ self.signature_oem + self.cert_chain_oem + (b'\xFF'*CERT_CHAIN_SIZE_V7) # why?
 
@@ -566,6 +568,7 @@ def drop(elff: elf.Elf):
 def generate(elff: elf.Elf, version: int, sw_id: int):
 	drop(elff)
 	assert elff.phdrs, "Need at least one program header"
+	elff.update(keep_load_segment_offsets=(version>=7 and False))
 
 	hash_seg = HashSegment[version]()
 
@@ -633,6 +636,21 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 		print("Signature verification failed:", e)
 	'''
 
+	# Get all the hash segment sizes set up before gtting the ELF header segment
+	if version >= 7:
+		hash_seg.metadata_common = b'\x00' * COMMON_METADATA_SIZE_V7
+		hash_seg.metadata_oem = b'\x00' * QTI_OEM_METADATA_SIZE_V7
+		hash_seg.metadata_qti = b'\x00' * QTI_OEM_METADATA_SIZE_V7
+
+		signature_oem = SIGNATURE_SIZE_SECP384R1 * b'\x00'
+		signature_qti = SIGNATURE_SIZE_SECP384R1 * b'\x00'
+		cert_der = CERT_CHAIN_SIZE_V7 * b'\xFF'
+
+		hash_seg.signature_oem = signature_oem
+		hash_seg.cert_chain_oem = cert_der
+		hash_seg.signature_qti = signature_qti
+		hash_seg.cert_chain_qti = cert_der
+
 	# Align maximum end address to get address for hash table header, then update header
 	hash_offs = HASH_SEG_ALIGN
 	hash_addr = _align(max(phdr.p_paddr + phdr.p_memsz for phdr in elff.phdrs), HASH_SEG_ALIGN)
@@ -661,9 +679,10 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 
 	# Now determine size of ELF header (including program headers)
 	hdr_hash_phdr.p_filesz = elff.total_header_size()
+	hash_phdr.data = hash_seg.pack()
 
 	# Recompute attributes to match final output (e.g. adjust e_phnum)
-	elff.update(keep_load_segment_offsets=(version>=7))
+	elff.update(keep_load_segment_offsets=(version>=7 and False))
 
 	# Compute the hash for the ELF header
 	with BytesIO() as hdr_io:
@@ -677,9 +696,17 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 	# TODO v3/v5/v6 signing
 	# In version 7, the signature and cert have to be valid ASN.1
 	if version >= 7:
+		arb_version_qti = 0
+		arb_version_oem = 0
+		unk_idk1_oem = 0x18C
+		unk_idk2_oem = 0x686b
+		unk_idk1_qti = 0
+		unk_idk2_qti = 0
+		unk_flags_oem = 0#0x155a56
+		unk_flags_qti = 0#0x155556
 		hash_seg.metadata_common = struct.pack("<LLLLLL", 0, 0, sw_id, 0, 3, 0)
-		hash_seg.metadata_oem = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
-		hash_seg.metadata_qti = struct.pack("<LL", 2, 0) + (QTI_OEM_METADATA_SIZE_V7-8) * b"\x00"
+		hash_seg.metadata_oem = struct.pack("<LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL", 2, 0, arb_version_oem, 0, 0xa00a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, unk_idk1_oem, unk_idk2_oem, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, unk_flags_oem)
+		hash_seg.metadata_qti = struct.pack("<LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL", 2, 0, arb_version_qti, 0, 0xa00a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, unk_idk1_qti, unk_idk2_qti, 0, 0, 0, 0,0, 0, 0, 0,0, 0, 0, 0,0, 0, 0, 0, 0, 0, 0, unk_flags_qti)
 
 		signature_oem = SIGNATURE_SIZE_SECP384R1 * b'\x00'
 		signature_qti = SIGNATURE_SIZE_SECP384R1 * b'\x00'
@@ -696,13 +723,28 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 		public_key = private_key.public_key()
 
 		# Build X.509 certificate
-		subject = issuer = x509.Name([
+		subject = x509.Name([
 		    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-		    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
-		    x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
-		    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "qtestsign"),
-		    x509.NameAttribute(NameOID.COMMON_NAME, "qtestsign fakesign cert"),
+		    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "CA"),
+		    x509.NameAttribute(NameOID.LOCALITY_NAME, "San Diego"),
+		    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "QUALCOMM"),
+		    x509.NameAttribute(NameOID.COMMON_NAME, "CASS - SBL4"),
 		])
+
+		issuer = x509.Name([
+		    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Qualcomm Technologies, Inc."),
+		    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Qualcomm Cryptographic Operations"),
+		    x509.NameAttribute(NameOID.COMMON_NAME, "SRoT MBNv7 Image Signing Root CA 6 SubCA 1"),
+		])
+
+		subject_key = x509.SubjectKeyIdentifier.from_public_key(private_key.public_key())
+		authority_key = x509.AuthorityKeyIdentifier.from_issuer_public_key(private_key.public_key())
+
+		basic_contraints = x509.BasicConstraints(ca=False, path_length=None)
+		key_usage = x509.KeyUsage(digital_signature=True, key_encipherment=True, key_cert_sign=False,
+                                  key_agreement=False, content_commitment=True, data_encipherment=True,
+                                  crl_sign=False, encipher_only=False, decipher_only=False)
+		extended_key_usage = x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.CODE_SIGNING])
 
 		cert_ecdsa = (
 		    x509.CertificateBuilder()
@@ -712,6 +754,10 @@ def generate(elff: elf.Elf, version: int, sw_id: int):
 		    .serial_number(x509.random_serial_number())
 		    .not_valid_before(datetime.utcnow())
 		    .not_valid_after(datetime.utcnow() + timedelta(days=365))
+		    .add_extension(authority_key, False)
+		    .add_extension(basic_contraints, False)
+		    .add_extension(key_usage, True)
+		    .add_extension(extended_key_usage, False)
 		    .sign(private_key, hashes.SHA384())
 		)
 
@@ -912,6 +958,11 @@ def dump(elff: elf.Elf, sect: elf.Phdr):
 
 		if len(cert_chain) < 1:
 			return
+
+		#if which_sig == "QTI" and authority == "QTI":
+		#	open("my_cert.der", "wb").write(cert_chain_der_split[0])
+		#	for attr in cert_chain[0].extensions:
+		#		print(attr)
 
 		# TODO: determine the algo from the cert chain?
 		any_successes = False

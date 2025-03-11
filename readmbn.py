@@ -17,13 +17,34 @@ def _read_mbn(elff: Elf):
     print("")
 
     print("Sections:")
-    print("Type   Offset   Vaddr    Paddr    Filesz   Memsz    Align     Perms")
+    print("PhdrType    Type   Offset   Vaddr    Paddr    Filesz   Memsz    Align     Perms")
     for phdr in elff.phdrs:
         
         seg_type = phdr.p_flags >> 20
         seg_perm = phdr.p_flags & 0xFF
+        p_type = phdr.p_type
         
-        outstr = ""
+        outstr = "PT_"
+
+        if (p_type == 0):
+            outstr += "NULL     "
+        elif (p_type == 1):
+            outstr += "LOAD     "
+        elif (p_type == 2):
+            outstr += "DYNAMIC  "
+        elif (p_type == 3):
+            outstr += "INTERP   "
+        elif (p_type == 4):
+            outstr += "NOTE     "
+        elif (p_type == 5):
+            outstr += "SHLIB    "
+        elif (p_type == 6):
+            outstr += "PHDR     "
+        elif (p_type == 7):
+            outstr += "TLS      "
+        else:
+            outstr += "UNK      "
+
         if (seg_type == 0x70):
             outstr += "HEADER "
         elif (seg_type == 0x20):
